@@ -1,21 +1,15 @@
+use crate::database::queries::UserBalance;
 use actix_web::HttpResponse;
 use bigdecimal::Signed;
 use prost::Message;
 
-use crate::proto::{
-    error, BadParameterError, Error, GenericOutput, UserBalanceData, UserNotFoundError,
-};
-use crate::queries::UserBalance;
+use crate::proto::{error, BadParameterError, Error, GenericOutput, UserBalanceData, UserNotFoundError};
 
 const USER_NOT_FOUND_ERROR: Error = Error {
     one_error: Some(error::OneError::UserNotFound(UserNotFoundError {})),
 };
 
-pub fn user_balance_data_http_response(
-    balance: UserBalance,
-    user_id: &str,
-    is_protobuf: bool,
-) -> HttpResponse {
+pub fn user_balance_data_http_response(balance: UserBalance, user_id: &str, is_protobuf: bool) -> HttpResponse {
     let data = match balance {
         UserBalance::Ok(balance) => GenericOutput {
             user_balance: Some(UserBalanceData {

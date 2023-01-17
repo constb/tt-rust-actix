@@ -40,3 +40,19 @@ pub struct Transaction {
     pub created_at: NaiveDateTime,
     pub idempotency_key: Option<String>,
 }
+
+#[derive(Insertable)]
+#[diesel(table_name = crate::schema::transaction)]
+pub struct NewTopupTransaction {
+    pub id: i64,
+    pub transaction_currency: String,
+    pub transaction_value: BigDecimal,
+    pub recipient_id: Option<String>,
+    pub recipient_currency: Option<String>,
+    pub recipient_value: Option<BigDecimal>,
+    pub recipient_balance_before: Option<BigDecimal>,
+    pub recipient_balance_after: Option<BigDecimal>,
+    pub merchant_data: Option<serde_json::Value>,
+    pub created_at: NaiveDateTime,
+    pub idempotency_key: Option<String>,
+}

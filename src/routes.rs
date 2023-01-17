@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+
 use std::ops::DerefMut;
 use std::str::FromStr;
 
@@ -9,8 +11,8 @@ use diesel::PgConnection;
 use tracing::{error, instrument};
 
 use crate::currency::CurrencyConverter;
-use crate::responses::{bad_parameter_http_response, user_balance_data_http_response};
-use crate::{mutations, proto, queries};
+use crate::database::{mutations, queries};
+use crate::{proto, responses};
 
 #[get("/balance/{user_id}")]
 #[instrument(skip(db), fields(request_id = request_id.as_str()))]
@@ -28,16 +30,14 @@ pub async fn balance_handler(
     let mut conn = db.get()?;
 
     let user_id1 = user_id.clone();
-    web::block(move || {
-        queries::load_balance(conn.deref_mut(), user_id1.as_str()).map_err(anyhow::Error::from)
-    })
-    .await
-    .unwrap_or_else(|e| {
-        error!("{e}");
-        Err(e.into())
-    })
-    .map(|balance| user_balance_data_http_response(balance, user_id.as_str(), is_protobuf))
-    .map_err(Into::into)
+    web::block(move || queries::load_balance(conn.deref_mut(), user_id1.as_str()).map_err(anyhow::Error::from))
+        .await
+        .unwrap_or_else(|e| {
+            error!("{e}");
+            Err(e.into())
+        })
+        .map(|balance| responses::user_balance_data_http_response(balance, user_id.as_str(), is_protobuf))
+        .map_err(Into::into)
 }
 
 #[post("/top-up")]
@@ -56,29 +56,29 @@ pub async fn top_up_handler(
     let mut conn = db.get()?;
 
     if top_up_request.idempotency_key.is_empty() {
-        return Ok(bad_parameter_http_response("idempotency_key", is_protobuf));
+        return Ok(responses::bad_parameter_http_response("idempotency_key", is_protobuf));
     }
     if top_up_request.user_id.is_empty() {
-        return Ok(bad_parameter_http_response("user_id", is_protobuf));
+        return Ok(responses::bad_parameter_http_response("user_id", is_protobuf));
     }
     if !curr.is_currency_valid(&top_up_request.currency) {
-        return Ok(bad_parameter_http_response("currency", is_protobuf));
+        return Ok(responses::bad_parameter_http_response("currency", is_protobuf));
     }
 
     let req_value = BigDecimal::from_str(top_up_request.value.as_str());
     let req_value = match req_value {
         Ok(req_value) => req_value,
-        Err(_) => return Ok(bad_parameter_http_response("value", is_protobuf)),
+        Err(_) => return Ok(responses::bad_parameter_http_response("value", is_protobuf)),
     };
     if req_value.is_negative() || req_value.is_zero() {
-        return Ok(bad_parameter_http_response("value", is_protobuf));
+        return Ok(responses::bad_parameter_http_response("value", is_protobuf));
     }
 
     // if merchant data is not empty, check if it is valid json
     if !top_up_request.merchant_data.is_empty() {
         let json = serde_json::from_str::<serde_json::Value>(top_up_request.merchant_data.as_str());
         if json.is_err() {
-            return Ok(bad_parameter_http_response("merchant_data", is_protobuf));
+            return Ok(responses::bad_parameter_http_response("merchant_data", is_protobuf));
         }
     }
 
@@ -99,14 +99,13 @@ pub async fn top_up_handler(
             req_merchant_data,
         )
         .map_err(anyhow::Error::from)?;
-        queries::load_balance(conn.deref_mut(), top_up_request.user_id.as_str())
-            .map_err(anyhow::Error::from)
+        queries::load_balance(conn.deref_mut(), top_up_request.user_id.as_str()).map_err(anyhow::Error::from)
     })
     .await
     .unwrap_or_else(|e| {
         error!("{e}");
         Err(e.into())
     })
-    .map(|balance| user_balance_data_http_response(balance, user_id1.as_str(), is_protobuf))
+    .map(|balance| responses::user_balance_data_http_response(balance, user_id1.as_str(), is_protobuf))
     .map_err(Into::into)
 }

@@ -2,27 +2,21 @@ use std::env;
 
 use actix_request_identifier::{IdReuse, RequestIdentifier};
 use actix_web::web::Data;
-use diesel::pg::PgConnection;
-use diesel::r2d2::{ConnectionManager, Pool};
-use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Registry;
 
+use crate::database::connect::{create_db_connection_pool, run_migrations};
 use crate::routes::{balance_handler, top_up_handler};
 
 mod currency;
-mod idgen;
-mod models;
-mod mutations;
+mod database;
 mod proto;
-mod queries;
 mod responses;
 mod routes;
 mod schema;
-
-const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
 #[actix_web::main]
 async fn main() {
@@ -31,9 +25,7 @@ async fn main() {
     // setup tracing and use bunyan formatter
     let formatting_layer = BunyanFormattingLayer::new("tt-rust".into(), std::io::stdout);
     let subscriber = Registry::default()
-        .with(filter_fn(|metadata| {
-            *metadata.level() <= tracing::Level::INFO
-        }))
+        .with(filter_fn(|metadata| *metadata.level() <= tracing::Level::INFO))
         .with(JsonStorageLayer)
         .with(formatting_layer);
     tracing::subscriber::set_global_default(subscriber).unwrap();
@@ -61,22 +53,4 @@ async fn main() {
         .run()
         .await
         .unwrap();
-}
-
-// create database connection pool with the database url using diesel
-fn create_db_connection_pool() -> Pool<ConnectionManager<PgConnection>> {
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let manager = ConnectionManager::<PgConnection>::new(database_url);
-    Pool::builder()
-        .test_on_check_out(true)
-        .build(manager)
-        .expect("Failed to create db connection pool.")
-}
-
-// run diesel migrations
-fn run_migrations(pool: &Pool<ConnectionManager<PgConnection>>) -> () {
-    pool.get()
-        .unwrap()
-        .run_pending_migrations(MIGRATIONS)
-        .expect("Failed to run migrations");
 }
