@@ -107,7 +107,7 @@ mod tests {
     use crate::{currency, database};
     use bigdecimal::BigDecimal;
     use diesel::result::Error;
-    use diesel::{Connection, ExpressionMethods, OptionalExtension, QueryDsl, RunQueryDsl};
+    use diesel::Connection;
     use std::str::FromStr;
 
     #[actix_web::test]
