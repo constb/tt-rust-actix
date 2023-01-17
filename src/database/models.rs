@@ -56,3 +56,15 @@ pub struct NewTopupTransaction {
     pub created_at: NaiveDateTime,
     pub idempotency_key: Option<String>,
 }
+
+#[derive(Insertable)]
+#[diesel(table_name = crate::schema::balance_reserve)]
+pub struct NewBalanceReserve {
+    pub order_id: String,
+    pub user_id: String,
+    pub item_id: String,
+    pub currency: String,
+    pub value: BigDecimal,
+    pub user_currency_value: BigDecimal,
+    pub created_at: NaiveDateTime,
+}

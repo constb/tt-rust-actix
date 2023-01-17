@@ -9,7 +9,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Registry;
 
 use crate::database::connect::{create_db_connection_pool, run_migrations};
-use crate::routes::{balance_handler, top_up_handler};
+use crate::routes::{balance_handler, reserve_handler, top_up_handler};
 
 mod currency;
 mod database;
@@ -45,6 +45,7 @@ async fn main() {
             .app_data(Data::new(currency_converter.clone()))
             .service(balance_handler)
             .service(top_up_handler)
+            .service(reserve_handler)
     });
 
     server
