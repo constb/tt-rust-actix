@@ -101,7 +101,7 @@ pub fn top_up(
     })
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub enum ReserveResult {
     Ok,
     UserNotFound,
@@ -259,5 +259,49 @@ mod tests {
 
             Ok(())
         });
+    }
+
+    #[actix_web::test]
+    async fn test_reserve() {
+        dotenvy::dotenv().ok();
+
+        let conn = database::connect::create_db_connection_pool();
+
+        let curr = currency::create_currency_converter().await;
+
+        let user_id = "test_user";
+        let currency = "USD";
+        let value = BigDecimal::from_str("100").unwrap();
+        let order_id = "test_order";
+
+        conn.get().unwrap().test_transaction::<_, Error, _>(|conn| {
+            let tx_id = top_up(conn, &curr, "id1", user_id, currency, value.clone(), None)?;
+            assert!(tx_id > 0);
+
+            let balance = queries::load_balance(conn, user_id)?;
+            assert_eq!(
+                balance,
+                UserBalance::Ok(UserBalanceValues {
+                    currency: currency.to_string(),
+                    balance: value.clone(),
+                    reserved: Default::default()
+                })
+            );
+
+            let res = reserve(conn, &curr, user_id, currency, value.clone(), order_id, None)?;
+            assert_eq!(res, ReserveResult::Ok);
+
+            let balance2 = queries::load_balance(conn, user_id)?;
+            assert_eq!(
+                balance2,
+                UserBalance::Ok(UserBalanceValues {
+                    currency: currency.to_string(),
+                    balance: BigDecimal::from_str("0").unwrap(),
+                    reserved: value.clone()
+                })
+            );
+
+            Ok(())
+        })
     }
 }
