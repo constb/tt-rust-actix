@@ -58,6 +58,20 @@ pub struct NewTopupTransaction {
 }
 
 #[derive(Insertable)]
+#[diesel(table_name = crate::schema::transaction)]
+pub struct NewCommitTransaction {
+    pub id: i64,
+    pub transaction_currency: String,
+    pub transaction_value: BigDecimal,
+    pub sender_id: Option<String>,
+    pub sender_currency: Option<String>,
+    pub sender_value: Option<BigDecimal>,
+    pub sender_balance_before: Option<BigDecimal>,
+    pub sender_balance_after: Option<BigDecimal>,
+    pub order_data: Option<serde_json::Value>,
+}
+
+#[derive(Insertable)]
 #[diesel(table_name = crate::schema::balance_reserve)]
 pub struct NewBalanceReserve {
     pub order_id: String,

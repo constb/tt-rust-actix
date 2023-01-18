@@ -1,10 +1,10 @@
 use crate::currency::CurrencyConverter;
-use crate::database::models::{NewBalanceReserve, NewTopupTransaction};
 use crate::database::{idgen, models};
-use bigdecimal::{BigDecimal, FromPrimitive};
+use bigdecimal::{BigDecimal, FromPrimitive, Signed};
 use diesel::result::Error;
 use diesel::{
-    Connection, ExpressionMethods, OptionalExtension, PgAnyJsonExpressionMethods, PgConnection, QueryDsl, RunQueryDsl,
+    Connection, ExpressionMethods, OptionalExtension, PgAnyJsonExpressionMethods, PgConnection, QueryDsl, QueryResult,
+    RunQueryDsl,
 };
 
 // creates new balance table record, on conflict does nothing
@@ -71,7 +71,7 @@ pub fn top_up(
             // create transaction record
             use crate::schema::transaction::dsl::*;
 
-            let new_transaction = NewTopupTransaction {
+            let new_transaction = models::NewTopupTransaction {
                 id: tx_id,
                 transaction_currency: req_currency.to_string(),
                 transaction_value: req_value,
@@ -195,7 +195,7 @@ pub fn reserve(
         // create reservation record
         {
             use crate::schema::balance_reserve::dsl::*;
-            let new_reserve = NewBalanceReserve {
+            let new_reserve = models::NewBalanceReserve {
                 order_id: req_order_id.to_string(),
                 item_id: req_item_id.unwrap_or_default().to_string(),
                 user_id: req_user_id.to_string(),
@@ -210,6 +210,95 @@ pub fn reserve(
         }
 
         Ok(ReserveResult::Ok)
+    })
+}
+
+pub enum CommitResult {
+    Ok(i64),
+    UserNotFound,
+    InsufficientFunds,
+}
+
+pub fn commit(
+    conn: &mut PgConnection,
+    curr: &CurrencyConverter,
+    req_user_id: &str,
+    req_currency: &str,
+    req_value: BigDecimal,
+    req_order_id: &str,
+    req_item_id: Option<&str>,
+) -> Result<CommitResult, Error> {
+    conn.transaction(|conn| {
+        // load user balance and lock for update
+        let user_balance: Option<models::Balance> = {
+            use crate::schema::balance::dsl::*;
+            balance
+                .filter(user_id.eq(req_user_id))
+                .for_update()
+                .first::<models::Balance>(conn)
+                .optional()?
+        };
+        let user_balance = match user_balance {
+            Some(user_balance) => user_balance,
+            None => return Ok(CommitResult::UserNotFound),
+        };
+
+        // idempotency check (transaction)
+        let existing_transaction: QueryResult<Option<models::Transaction>> = {
+            use crate::schema::transaction::dsl::*;
+            transaction
+                .filter(order_data.retrieve_as_text("order_id").eq(req_order_id))
+                .first::<models::Transaction>(conn)
+                .optional()
+        };
+        match existing_transaction {
+            Ok(Some(tx)) => return Ok(CommitResult::Ok(tx.id)), // already committed
+            Err(e) => return Err(e),
+            Ok(None) => {}
+        };
+
+        // delete pre-existing reservation
+        let previously_reserved = {
+            use crate::schema::balance_reserve::dsl::*;
+            diesel::delete(balance_reserve.filter(order_id.eq(req_order_id))).execute(conn)?
+        } > 0;
+
+        let commit_in_user_balance_currency =
+            curr.convert(req_currency, req_value.clone(), user_balance.currency.as_str());
+
+        let balance_new_value = user_balance.current_value.clone() - commit_in_user_balance_currency.clone();
+
+        if balance_new_value.is_negative() && (!previously_reserved || req_currency == user_balance.currency) {
+            return Ok(CommitResult::InsufficientFunds);
+        }
+
+        let tx_id = idgen::next();
+        let req_order_data = serde_json::json!({"order_id": req_order_id,"item_id": req_item_id,});
+        {
+            // insert commit transaction record
+            use crate::schema::transaction::dsl::*;
+            let new_tx = models::NewCommitTransaction {
+                id: tx_id,
+                transaction_currency: req_currency.to_string(),
+                transaction_value: req_value,
+                sender_id: Some(req_user_id.to_string()),
+                sender_currency: Some(user_balance.currency.clone()),
+                sender_value: Some(commit_in_user_balance_currency),
+                sender_balance_before: Some(user_balance.current_value),
+                sender_balance_after: Some(balance_new_value.clone()),
+                order_data: Some(req_order_data),
+            };
+            diesel::insert_into(transaction).values(&new_tx).execute(conn)?;
+        }
+        // save new balance value
+        {
+            use crate::schema::balance::dsl::*;
+            diesel::update(balance.filter(user_id.eq(req_user_id)))
+                .set(current_value.eq(balance_new_value))
+                .execute(conn)?;
+        }
+
+        Ok(CommitResult::Ok(tx_id))
     })
 }
 

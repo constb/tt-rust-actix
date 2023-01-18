@@ -195,3 +195,97 @@ pub async fn reserve_handler(
         Err(e.into())
     })
 }
+
+#[post("/commit")]
+#[instrument(skip(db, curr), fields(request_id = request_id.as_str()))]
+pub async fn commit_handler(
+    db: web::Data<Pool<ConnectionManager<PgConnection>>>,
+    curr: web::Data<currency::CurrencyConverter>,
+    request_id: RequestId,
+    accept: web::Header<header::Accept>,
+    commit_request: web::Json<proto::CommitReservationInput>,
+) -> Result<HttpResponse, Box<dyn std::error::Error>> {
+    let is_protobuf = accept
+        .iter()
+        .any(|a| a.to_string() == "application/x-protobuf".to_string());
+
+    let mut conn = db.get()?;
+
+    let req_user_id = commit_request.user_id.clone();
+    if req_user_id.is_empty() {
+        return Ok(responses::bad_parameter_http_response("user_id is empty", is_protobuf));
+    }
+    if !curr.is_currency_valid(&commit_request.currency) {
+        return Ok(responses::bad_parameter_http_response(
+            "currency is invalid",
+            is_protobuf,
+        ));
+    }
+    let req_value = BigDecimal::from_str(commit_request.value.as_str());
+    let req_value = match req_value {
+        Ok(req_value) => {
+            if req_value.is_negative() || req_value.is_zero() {
+                return Ok(responses::bad_parameter_http_response("value is invalid", is_protobuf));
+            }
+            req_value
+        }
+        Err(_) => return Ok(responses::bad_parameter_http_response("value is invalid", is_protobuf)),
+    };
+    if commit_request.order_id.is_empty() {
+        return Ok(responses::bad_parameter_http_response("order_id is empty", is_protobuf));
+    }
+
+    enum BlockResult {
+        CommitError(mutations::ReserveResult),
+        BalanceResult(queries::UserBalance),
+        Error(anyhow::Error),
+    }
+    web::block(move || {
+        let req_item_id = if commit_request.item_id.is_empty() {
+            None
+        } else {
+            Some(commit_request.item_id.as_str())
+        };
+        let res = mutations::commit(
+            conn.deref_mut(),
+            &curr,
+            commit_request.user_id.as_str(),
+            commit_request.currency.as_str(),
+            req_value,
+            commit_request.order_id.as_str(),
+            req_item_id,
+        );
+        match res {
+            Ok(res) => match res {
+                mutations::CommitResult::Ok(_) => {}
+                mutations::CommitResult::UserNotFound => {
+                    return BlockResult::CommitError(mutations::ReserveResult::UserNotFound)
+                }
+                mutations::CommitResult::InsufficientFunds => {
+                    return BlockResult::CommitError(mutations::ReserveResult::InsufficientFunds)
+                }
+            },
+            Err(e) => return BlockResult::Error(e.into()),
+        };
+
+        let res = queries::load_balance(conn.deref_mut(), commit_request.user_id.as_str());
+        match res {
+            Ok(res) => BlockResult::BalanceResult(res),
+            Err(e) => BlockResult::Error(e.into()),
+        }
+    })
+    .await
+    .map(|res| match res {
+        BlockResult::CommitError(res) => Ok(responses::reserve_error_http_response(res, is_protobuf)),
+        BlockResult::BalanceResult(balance) => Ok(responses::user_balance_data_http_response(
+            balance,
+            req_user_id.as_str(),
+            is_protobuf,
+        )),
+        BlockResult::Error(e) => Err(e.into()),
+    })
+    .unwrap_or_else(|e| {
+        error!("{e}");
+        Err(e.into())
+    })
+}
