@@ -40,7 +40,7 @@ pub async fn balance_handler(
 }
 
 #[post("/top-up")]
-#[instrument(skip(db), fields(request_id = request_id.as_str()))]
+#[instrument(skip(db, curr), fields(request_id = request_id.as_str()))]
 pub async fn top_up_handler(
     db: web::Data<Pool<ConnectionManager<PgConnection>>>,
     curr: web::Data<currency::CurrencyConverter>,
@@ -110,7 +110,7 @@ pub async fn top_up_handler(
 }
 
 #[post("/reserve")]
-#[instrument(skip(db), fields(request_id = request_id.as_str()))]
+#[instrument(skip(db, curr), fields(request_id = request_id.as_str()))]
 pub async fn reserve_handler(
     db: web::Data<Pool<ConnectionManager<PgConnection>>>,
     curr: web::Data<currency::CurrencyConverter>,
